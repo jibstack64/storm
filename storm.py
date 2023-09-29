@@ -1,12 +1,79 @@
 # Import required libraries
+import urllib.request as request
 import tkinter as tk
-import urllib
+import json
 
-def get_config(font: tuple[str, int, str] = 
-            ("arial", 12, "normal")) -> tuple[str, int, str, int]:
+class StormClient:
+    "Manages HTTP requests to the storm server."
+    
+    def __init__(self, ip: str, port: int) -> None:
+        self._ip, self._port = ip, port
+        self._registered = False
+        self._encoding, self._nick_length = None, None
+
+        self.messages: list[dict[str, dict | str]] = []
+
+    @property
+    def address(self) -> str:
+        return f"http://{self._ip}:{self._port}"
+    
+    @property
+    def registered(self) -> bool:
+        return self._registered
+    
+    @property
+    def encoding(self) -> str:
+        return self._encoding
+
+    @property
+    def nick_length(self) -> int:
+        return self._nick_length
+    
+    # http utilities
+
+    def request(self, data: dict | list = None) -> request.Request:
+        "Forms a `request.Request` object with the proper headers."
+        
+        return request.Request(self.address, data=data, headers={
+            "Content-Type": "application/json"
+        })
+
+    def get(self) -> dict | list:
+        "Sends a GET request to the server."
+
+        return json.loads(request.urlopen(self.address).read())
+
+    def post(self, data: dict | list) -> dict:
+        "Sends a POST request alongside `data`."
+
+        return json.loads(request.urlopen(self.request(data)).read())
+
+    def patch(self, data: dict | list) -> dict:
+        "Sends a PATCH request alongside `data`."
+
+        r = self.request(data)
+        r.get_header = lambda : "PATCH"
+        return json.loads(request.urlopen(r).read())
+
+    # etc...
+
+    def register(self) -> bool:
+        "Returns True if successfully registered."
+
+        if self.registered:
+            return True
+        else:
+            if self.post({})["status"] != 201:
+                return False
+    
+
+def create_client(font: tuple[str, int, str] = 
+            ("arial", 12, "normal")) -> StormClient:
     """Opens a popup and prompts the user for an IP and port.
     Then attempts to retrieve the target server configuration.
-    Repeats if the server does not exist or is invalid."""
+    Repeats if the server does not exist or is invalid.
+    If all goes well, returns a StormClient instance with all
+    of the appropriate values."""
 
     # To be filled in
     global ip, port
@@ -18,14 +85,14 @@ def get_config(font: tuple[str, int, str] =
         try:
             port = int(port_input.get())
         except ValueError:
-            root.destroy() 
-            return get_config(font)
+            root.destroy()
+            return create_client(font)
         root.destroy()
 
     root = tk.Tk()
 
     root.resizable(False, False)
-    root.geometry("250x150")
+    root.geometry("175x120")
     root.configure(background="#F0F8FF")
     root.title("Configuration")
 
@@ -39,24 +106,17 @@ def get_config(font: tuple[str, int, str] =
     tk.Label(root, text="Port:", bg="#F0F8FF", font=font).place(x=110, y=10)
 
     # Submit button
-    connect_button = tk.Button(root, text="Submit", font=font, command=stop_gui)
-    connect_button.place(x = 100, y = 100) 
+    connect_button = tk.Button(root, text="Connect", font=font, command=stop_gui)
+    connect_button.place(x = 40, y = 70) 
 
     root.mainloop()
 
     # Get configuration
+    if None in [ip, port]:
+        exit(0) # User closed window
     
-
+    
     return (ip, port, "", 0)
 
-
-# Configuration
-IP, PORT, ENCODING, NICK_LENGTH = get_config()
-
-print(IP, ":", PORT)
-
-class StormClient:
-    "Manages HTTP requests to the storm server."
-    
-    def __init__(self, ip: str) -> None:
-        pass
+if __name__ == "__main__":
+    client = create_client()

@@ -132,7 +132,7 @@ class StormHandler(http.server.BaseHTTPRequestHandler):
 
         data = json.dumps({
             "status": code,
-            "message": data
+            "reason": data
         } if type(data) in [str, bytes] else data)
 
         self.send_response(code)
