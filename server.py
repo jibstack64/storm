@@ -28,6 +28,10 @@ INVALID = ("Invalid request.", 400)
 SUCCESS = ("Success.", 200)
 ERROR = ("Internal error.", 500)
 
+# Global variables
+users: list["StormUser"] = []
+messages: list["StormMessage"] = []
+
 def get(l: list[object], attr: str, value: object) -> object | None:
     "Finds the object in `l` where `l[x].attr` is equal to `value`."
 
@@ -114,14 +118,8 @@ class StormHandler(http.server.BaseHTTPRequestHandler):
                 server: socketserver.BaseServer) -> None:
         super().__init__(request, client_address, server)
 
-        self.users: list[StormUser] = []
-        self.messages: list[StormMessage] = []
-
-        # A few small utilities
-        self.is_registered = lambda ip : True in [u.ip == ip for u in self.users]
-
     @property
-    def address_string(self) -> str:
+    def address(self) -> str:
         "I made it a property because, I mean, cmon Python standard libs!!!"
 
         return super().address_string()
@@ -150,22 +148,22 @@ class StormHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         # Check if the user is registered
-        user: StormUser = get(self.users, "ip", self.address_string)
+        user: StormUser = get(users, "ip", self.address)
         if user == None:
             return self.respond(*NOT_REGISTERED)
         
         # Give the user the messages
-        self.respond([m.to_json() for m in self.messages[user.has:]])
-        user.has = len(self.messages)
+        self.respond([m.to_json() for m in messages[user.has:]])
+        user.has = len(messages)
 
     def do_POST(self) -> None:
         # Register the user if they're not already
-        user: StormUser = get(self.users, "ip", self.address_string)
+        user: StormUser = get(users, "ip", self.address)
         if user == None:
-            self.users.append(
-                StormUser(self.address_string,
-                    once([u.nickname for u in self.users], generate),
-                    len(self.messages)
+            users.append(
+                StormUser(self.address,
+                    once([u.nickname for u in users], generate),
+                    len(messages)
                 )
             )
             return self.respond(*REGISTERED)
@@ -180,14 +178,14 @@ class StormHandler(http.server.BaseHTTPRequestHandler):
         if content == None:
             return self.respond(*INVALID)
         else:
-            self.messages.append(
+            messages.append(
                 StormMessage(content, user)
             )
             return self.respond(*MESSAGE_CREATED)
     
     def do_PATCH(self) -> None:
         # Check if the user is registered
-        user: StormUser = get(self.users, "ip", self.address_string)
+        user: StormUser = get(users, "ip", self.address)
         if user == None:
             return self.respond(*NOT_REGISTERED)
         

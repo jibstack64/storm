@@ -1,6 +1,8 @@
 # Import required libraries
 import urllib.request as request
 import tkinter as tk
+import threading
+import time
 import json
 
 class StormClient:
@@ -9,7 +11,7 @@ class StormClient:
     def __init__(self, ip: str, port: int) -> None:
         self._ip, self._port = ip, port
         self._registered = False
-        self._encoding, self._nick_length = None, None
+        self._encoding, self._nick_length = "utf-8", 8
 
         self.messages: list[dict[str, dict | str]] = []
 
@@ -28,29 +30,39 @@ class StormClient:
     @property
     def nick_length(self) -> int:
         return self._nick_length
-    
+
     # http utilities
+
+    def open_url(self, req: str | request.Request, *args, **kwargs):
+        "A proxy for the `urllib` `urlopen` function. Useful for extra functionality."
+
+        return request.urlopen(req, *args, **kwargs)
 
     def request(self, data: dict | list = None) -> request.Request:
         "Forms a `request.Request` object with the proper headers."
         
-        return request.Request(self.address, data=data, headers={
-            "Content-Type": "application/json"
-        })
+        return request.Request(
+            self.address, data=json.dumps(data).encode(self.encoding) if data != None else data,
+                headers={
+                    "Content-Type": "application/json"
+                }
+            )
 
     def get(self) -> dict | list:
         "Sends a GET request to the server."
 
         return json.loads(request.urlopen(self.address).read())
 
-    def post(self, data: dict | list) -> dict:
+    def post(self, data: dict | list = None) -> dict:
         "Sends a POST request alongside `data`."
 
+        data = {} if data == None else data
         return json.loads(request.urlopen(self.request(data)).read())
 
-    def patch(self, data: dict | list) -> dict:
+    def patch(self, data: dict | list = None) -> dict:
         "Sends a PATCH request alongside `data`."
 
+        data = {} if data == None else data
         r = self.request(data)
         r.get_header = lambda : "PATCH"
         return json.loads(request.urlopen(r).read())
@@ -63,9 +75,44 @@ class StormClient:
         if self.registered:
             return True
         else:
-            if self.post({})["status"] != 201:
-                return False
+            # Check through error
+            r = None
+            try:
+                r = self.post()
+            except:
+                return True
+            # Config
+            if r.get("encoding") != None or r.get("status") == 400:
+                self._encoding, self._nick_length = r["encoding"], r["nick_length"]
+                return True
+        return False
     
+    def refresh(self) -> int:
+        """Retrieves new messages and appends them to the `self.messages` list.
+        Returns the number of new messages."""
+
+        new = self.get()
+        for n in new:
+            self.messages.append(n)
+        return len(new)
+    
+    def send(self, message: str) -> int:
+        "Attempts to send a message and returns the status code."
+
+        return self.post({
+            "content": message
+        })["status"]
+    
+    def every(self, seconds: int, func: object, alive: list[bool]) -> None:
+        "Runs `func` every `seconds` until `alive[0]` is `False`."
+
+        def repeat():
+            while alive[0]:
+                func()
+                time.sleep(seconds)
+        
+        threading.Thread(target=repeat).start()
+
 
 def create_client(font: tuple[str, int, str] = 
             ("arial", 12, "normal")) -> StormClient:
@@ -115,8 +162,28 @@ def create_client(font: tuple[str, int, str] =
     if None in [ip, port]:
         exit(0) # User closed window
     
-    
-    return (ip, port, "", 0)
+    return StormClient(ip, port)
 
 if __name__ == "__main__":
     client = create_client()
+
+    # Attempt to register
+    if not client.register():
+        print("Failed to register on the server.")
+        exit(1)
+
+    # Refresh messages every 8 seconds
+    alive = [True] # Eh.. pointer alternative
+    client.every(8, client.refresh, alive)
+
+    root = tk.Tk()
+
+    root.resizable(False, False)
+    root.geometry("500x500")
+    root.configure(background="#F0F8FF")
+    root.title("Chat")
+
+    root.mainloop()
+    
+    alive[0] = False # Deactive refresh
+
