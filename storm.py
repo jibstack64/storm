@@ -1,17 +1,85 @@
 # Import required libraries
+import tkinter.messagebox as msg
 import urllib.request as request
+import urllib.error as ulerror
 import tkinter as tk
 import threading
 import time
 import json
+import os
+
+def screen_geometry() -> tuple[int, int]:
+    "Calculates and returns the screen's width and height."
+
+    root = tk.Tk()
+    root.update_idletasks()
+    root.attributes("-fullscreen", True)
+    root.state("iconic")
+    geometry = (root.winfo_width(), root.winfo_height())
+    root.destroy()
+    return geometry
+
+def scale(n: int | str | tuple, p: str | None = "x") -> int | str | dict:
+    "Scales `n` (a set of dimensions, scale, or other) based on the screen dimensions."
+
+    t = type(n)
+    if t == int:
+        return int(round(n * (SCALE[0] if p == "x" else SCALE[1])))
+    elif t == str:
+        x, y, = n.split("x")
+        return "x".join([str(int(round(int(x) * SCALE[0]))),
+                        str(int(round(int(y) * SCALE[1])))])
+    else:
+        # For kwargs!! Cus I'm nice neat like that
+        return {
+            "x": int(round(n[0] * SCALE[0])),
+            "y": int(round(n[1] * SCALE[1]))
+        }
+
+class Popup:
+    "Houses functions that create simple popup messages."
+
+    # general popups
+
+    def error(message: str = "An error occured.", fatal: bool = False) -> None:
+        msg.showerror("Error", message)
+        if fatal:
+            exit(1)
+
+    def warning(message: str = "This may create errors.") -> None:
+        msg.showwarning("Warning", message)
+
+    def info(title: str, message: str) -> None:
+        msg.showinfo(title, message)
+
+    # conditional popups
+
+    def yes_or_no(message: str, cancel: bool = False) -> bool | None:
+        return msg.askyesnocancel(
+            "Question", message
+        ) if cancel else msg.askyesno(
+            "Question", message
+        )
+    
+    def proceed(message: str) -> bool:
+        return msg.askokcancel("Proceed", message)
+    
+    #def question(message: str) -> str:
+    #    return msg.askquestion("Question", message)
+
 
 class StormClient:
     "Manages HTTP requests to the storm server."
     
     def __init__(self, ip: str, port: int) -> None:
         self._ip, self._port = ip, port
-        self._registered = False
         self._encoding, self._nick_length = "utf-8", 8
+        self._token = ""
+        self._threads_alive = True
+
+        
+        # on_error decorated functions
+        self._on_error = []
 
         self.messages: list[dict[str, dict | str]] = []
 
@@ -20,102 +88,140 @@ class StormClient:
         return f"http://{self._ip}:{self._port}"
     
     @property
-    def registered(self) -> bool:
-        return self._registered
-    
-    @property
     def encoding(self) -> str:
         return self._encoding
 
     @property
     def nick_length(self) -> int:
         return self._nick_length
+    
+    @property
+    def token(self) -> str:
+        return self._token
 
     # http utilities
 
-    def open_url(self, req: str | request.Request, *args, **kwargs):
-        "A proxy for the `urllib` `urlopen` function. Useful for extra functionality."
-
-        return request.urlopen(req, *args, **kwargs)
-
-    def request(self, data: dict | list = None) -> request.Request:
+    def request(self, data: dict | list = None, method: str = None) -> request.Request:
         "Forms a `request.Request` object with the proper headers."
         
         return request.Request(
             self.address, data=json.dumps(data).encode(self.encoding) if data != None else data,
                 headers={
-                    "Content-Type": "application/json"
-                }
+                    "Content-Type": "application/json",
+                    "Token": self.token
+                },
+                method=method
             )
 
-    def get(self) -> dict | list:
+    def get(self) -> dict | list | None:
         "Sends a GET request to the server."
+        
+        try:
+            return json.loads(request.urlopen(self.request(None, "GET")).read())
+        except Exception as e:
+            return self.on_error(e)
 
-        return json.loads(request.urlopen(self.address).read())
-
-    def post(self, data: dict | list = None) -> dict:
+    def post(self, data: dict | list = None) -> dict | None:
         "Sends a POST request alongside `data`."
 
         data = {} if data == None else data
-        return json.loads(request.urlopen(self.request(data)).read())
+        try:
+            return json.loads(request.urlopen(self.request(data, "POST")).read())
+        except Exception as e:
+            return self.on_error(e)
 
     def patch(self, data: dict | list = None) -> dict:
         "Sends a PATCH request alongside `data`."
 
         data = {} if data == None else data
-        r = self.request(data)
-        r.get_header = lambda : "PATCH"
-        return json.loads(request.urlopen(r).read())
+        r = self.request(data, "PATCH")
+        try:
+            return json.loads(request.urlopen(r).read())
+        except Exception as e:
+            return self.on_error(e)
 
     # etc...
 
-    def register(self) -> bool:
-        "Returns True if successfully registered."
+    def on_error(self, f: object | Exception) -> None:
+        """Can be implemented as a decorator to call a function when an error
+        occurs. Is also called directly when an error occurs, where `f` is the
+        exception object - the exception is then provided to all functions
+        decorated with `on_error`."""
 
-        if self.registered:
+        # Implement as decorator
+        if callable(f):
+            self._on_error.append(f)
+        # When called, call runners
+        else:
+            for r in self._on_error:
+                r(f)
+
+    def register(self) -> bool:
+        "Returns `True` if successfully registered."
+
+        if self.token != "":
             return True
         else:
             # Check through error
             r = None
             try:
                 r = self.post()
-            except:
-                return True
-            # Config
-            if r.get("encoding") != None or r.get("status") == 400:
-                self._encoding, self._nick_length = r["encoding"], r["nick_length"]
+            except Exception as e:
+                if type(e) == ulerror.HTTPError:
+                    return True
+                else:
+                    self.on_error(e)
+                    return False
+            # Register + received config
+            if r.get("nick_length") != None:
+                self._encoding, self._nick_length, self._token = r["encoding"], r["nick_length"], r["token"]
                 return True
         return False
     
-    def refresh(self) -> int:
-        """Retrieves new messages and appends them to the `self.messages` list.
-        Returns the number of new messages."""
+    def nickname(self, new: str) -> dict | None:
+        "Attempts to change the clients's nickname. Returns the response."
 
-        new = self.get()
-        for n in new:
-            self.messages.append(n)
-        return len(new)
+        new.replace(" ", "-")[:self.nick_length]
+        r = None
+        try:
+            r = self.patch({
+                "nickname": new
+            })
+        except Exception as e:
+            return self.on_error(e)
+        return r
     
-    def send(self, message: str) -> int:
-        "Attempts to send a message and returns the status code."
+    def refresh(self) -> None:
+        "Retrieves new messages and appends them to the `self.messages` list."
+
+        self.messages = self.get() or []
+    
+    def send(self, message: str) -> dict:
+        "Attempts to send a message and returns the JSON response."
 
         return self.post({
             "content": message
-        })["status"]
+        })
     
-    def every(self, seconds: int, func: object, alive: list[bool]) -> None:
+    def every(self, seconds: int, func: object) -> None:
         "Runs `func` every `seconds` until `alive[0]` is `False`."
 
+        self._threads_alive = True
+
         def repeat():
-            while alive[0]:
-                func()
+            while self._threads_alive:
                 time.sleep(seconds)
+                func()
         
         threading.Thread(target=repeat).start()
 
+    def kill(self) -> None:
+        "Kills all running `every` loops."
 
-def create_client(font: tuple[str, int, str] = 
-            ("arial", 12, "normal")) -> StormClient:
+        self._threads_alive = False
+
+
+def create_client() -> StormClient:
     """Opens a popup and prompts the user for an IP and port.
     Then attempts to retrieve the target server configuration.
     Repeats if the server does not exist or is invalid.
@@ -124,7 +230,7 @@ def create_client(font: tuple[str, int, str] =
 
     # To be filled in
     global ip, port
-    ip, port, encoding, nick_length = (None for x in range(0, 4))
+    ip, port = None, None
 
     def stop_gui() -> None:
         global ip, port
@@ -133,28 +239,29 @@ def create_client(font: tuple[str, int, str] =
             port = int(port_input.get())
         except ValueError:
             root.destroy()
-            return create_client(font)
+            Popup.error("Port value must be an integer.")
+            return create_client()
         root.destroy()
 
     root = tk.Tk()
 
     root.resizable(False, False)
-    root.geometry("175x120")
+    root.geometry(scale("170x120"))
     root.configure(background="#F0F8FF")
     root.title("Configuration")
 
     # Ip and port inputs
-    ip_input, port_input = tk.Entry(root, width="10", font=font), tk.Entry(root, width="5", font=font)
-    ip_input.place(x = 10, y = 35)
-    port_input.place(x = 110, y = 35)
+    ip_input, port_input = tk.Entry(root, width=10, font=FONT), tk.Entry(root, width=5, font=FONT)
+    ip_input.place(**scale((10, 35)))
+    port_input.place(**scale((110, 35)))
 
     # Ip and port labels
-    tk.Label(root, text="IP:", bg="#F0F8FF", font=font).place(x=10, y=10)
-    tk.Label(root, text="Port:", bg="#F0F8FF", font=font).place(x=110, y=10)
+    tk.Label(root, text="IP:", bg="#F0F8FF", font=FONT).place(**scale((10, 10)))
+    tk.Label(root, text="Port:", bg="#F0F8FF", font=FONT).place(**scale((110, 10)))
 
     # Submit button
-    connect_button = tk.Button(root, text="Connect", font=font, command=stop_gui)
-    connect_button.place(x = 40, y = 70) 
+    connect_button = tk.Button(root, text="Connect", font=FONT, command=stop_gui)
+    connect_button.place(**scale((40, 70))) 
 
     root.mainloop()
 
@@ -164,26 +271,117 @@ def create_client(font: tuple[str, int, str] =
     
     return StormClient(ip, port)
 
+# Configuration
+WIDTH, HEIGHT = screen_geometry()
+SCALE = (
+    WIDTH / 1920,
+    HEIGHT / 1080
+) if Popup.yes_or_no(
+    """Your display is smaller/larger than a standard monitor.
+    
+Dynamic scaling will adjust the graphical interface to size correctly.
+However, it may cause elements to be positioned incorrectly.
+    
+Enable it?""",
+    False
+) else (1, 1)
+FONT = ("Arial", scale(12, "x"), "normal")
+REFRESH = 5
+TEXT_BG = "#181d26"
+TEXT_FG = "#ffffff"
+MAIN_BG = "#36393f"
+BUTTON_BG = "#7289da"
+
 if __name__ == "__main__":
     client = create_client()
 
+    # Special / commands
+    commands = {} # So that it can be accessed vvv
+    commands = {
+        "commands": lambda *args : Popup.info("Commands", ", ".join([f"/{c}" for c, _ in commands.items()])),
+        "nick": lambda *args : Popup.info(
+            "Nickname",
+            (client.nickname(" ".join(args)) or {"reason": "Failed to change nickname."})["reason"]
+        ),
+        "auth": lambda *args : (client.__setattr__("_token", args[0]), Popup.info("Authorisation", "Set token."))
+    }
+
+    # Error handler
+    @client.on_error
+    def on_error(e: Exception):
+        if type(e) == ulerror.URLError:
+            client.kill()
+            Popup.error("There was a problem connecting to the server.", True)
+        elif type(e) == ulerror.HTTPError:
+            Popup.warning(f"{e.code}: {e.msg}")
+        else:
+            Popup.error(e)
+
     # Attempt to register
     if not client.register():
-        print("Failed to register on the server.")
-        exit(1)
+        Popup.error("Failed to register on the server.", True)
 
-    # Refresh messages every 8 seconds
-    alive = [True] # Eh.. pointer alternative
-    client.every(8, client.refresh, alive)
-
+    # Setup the window
     root = tk.Tk()
-
     root.resizable(False, False)
-    root.geometry("500x500")
-    root.configure(background="#F0F8FF")
+    root.geometry(scale("500x500"))
+    root.configure(background=MAIN_BG)
     root.title("Chat")
 
+    # Chat list
+    chat = tk.Text(root, width=53, height=24, fg=TEXT_FG, bg=TEXT_BG,
+                    wrap="word", state="disabled", font=FONT)   
+    chat.place(**scale((10, 10)))
+
+    # Fill chat automatically
+    def add():
+        client.refresh()
+
+        # Make it writable
+        chat.config(state="normal")
+
+        chat.delete("1.0", tk.END) # Clear
+        for m in range(1, len(client.messages)+1):
+            message = client.messages[m-1]
+            chat.insert(f"{m}.0", f"{message['user']['nickname']}\t | {message['content']}\n")
+        
+        # User shouldn't be able to modify!!
+        chat.config(state="disabled")
+        chat.yview(tk.END)
+
+        root.after(REFRESH * 1000, add)
+
+    add() # Start immediately
+
+    # Message input
+    message = tk.Entry(root, width=45, bg=TEXT_BG, fg=TEXT_FG, font=FONT)
+    message.place(**scale((10, 472)))
+
+    # Submit messages
+    def send() -> None:
+
+        data = message.get()
+        message.delete(0, tk.END)
+
+        # Message
+        if not data.startswith("/"):
+            client.send(data)
+            client.refresh()
+        # Command
+        else:
+            args = data[1:].split(" ")
+            for k, f in commands.items():
+                if args[0] == k:
+                    return f(*args[1:])
+            return Popup.error(f"That command does not exist.")
+
+    # Message submit
+    post_button = tk.Button(root, width=5, height=1, bg=BUTTON_BG, text="Post", command=send, font=FONT)
+    post_button.place(**scale((430, 470)))
+
     root.mainloop()
+
+    Popup.info("Token", client.token)
     
-    alive[0] = False # Deactive refresh
+    client.kill()
 
