@@ -3,7 +3,9 @@ import tkinter.messagebox as msg
 import urllib.request as request
 import urllib.error as ulerror
 import tkinter as tk
+import subprocess
 import threading
+import atexit
 import time
 import json
 import os
@@ -35,6 +37,20 @@ def scale(n: int | str | tuple, p: str | None = "x") -> int | str | dict:
             "x": int(round(n[0] * SCALE[0])),
             "y": int(round(n[1] * SCALE[1]))
         }
+    
+def run(command: str | tuple) -> int | str:
+    """Runs `command`. Returns the code that the program provides, or the output
+    if retrievable."""
+
+    output = None
+    try:
+        output = subprocess.run(
+            command if isinstance(command, tuple) else command.split(" "),
+            stdout=subprocess.PIPE, text=True
+        ).stdout
+    except:
+        output = os.system(command)
+    return output
 
 class Popup:
     "Houses functions that create simple popup messages."
@@ -64,6 +80,7 @@ class Popup:
     def proceed(message: str) -> bool:
         return msg.askokcancel("Proceed", message)
     
+    # (Same as yes_or_no)
     #def question(message: str) -> str:
     #    return msg.askquestion("Question", message)
 
@@ -77,6 +94,8 @@ class StormClient:
         self._token = ""
         self._threads_alive = True
 
+        # Automatically kill on exit
+        atexit.register(self.kill)
         
         # on_error decorated functions
         self._on_error = []
@@ -98,6 +117,10 @@ class StormClient:
     @property
     def token(self) -> str:
         return self._token
+    
+    @property
+    def registered(self) -> bool:
+        return isinstance(self.get(), list)
 
     # http utilities
 
@@ -159,7 +182,7 @@ class StormClient:
     def register(self) -> bool:
         "Returns `True` if successfully registered."
 
-        if self.token != "":
+        if self.registered:
             return True
         else:
             # Check through error
@@ -215,9 +238,28 @@ class StormClient:
         
         threading.Thread(target=repeat).start()
 
-    def kill(self) -> None:
-        "Kills all running `every` loops."
+    def load(self) -> str | None:
+        "Reads the token from a `token` file if it exists."
 
+        if os.path.isfile(TOKEN):
+            with open(TOKEN, "r") as f:
+                self._token = f.read().strip()
+                f.close()
+            return self.token
+        return None
+
+    def store(self) -> None:
+        "Stores the current token in a `token` file."
+        
+        if self.token != "":
+            with open(TOKEN, "w") as f:
+                f.write(self.token)
+                f.close()
+
+    def kill(self) -> None:
+        "Kills all running `every` loops and shuts the client down appropriately."
+
+        self.store()
         self._threads_alive = False
 
 
@@ -287,6 +329,7 @@ Enable it?""",
 ) else (1, 1)
 FONT = ("Arial", scale(12, "x"), "normal")
 REFRESH = 5
+TOKEN = "token"
 TEXT_BG = "#181d26"
 TEXT_FG = "#ffffff"
 MAIN_BG = "#36393f"
@@ -303,7 +346,8 @@ if __name__ == "__main__":
             "Nickname",
             (client.nickname(" ".join(args)) or {"reason": "Failed to change nickname."})["reason"]
         ),
-        "auth": lambda *args : (client.__setattr__("_token", args[0]), Popup.info("Authorisation", "Set token."))
+        "login": lambda *args : (client.__setattr__("_token", args[0]), Popup.info("Token", "Token set.")),
+        "run": lambda *args : Popup.info("Run", run(args))
     }
 
     # Error handler
@@ -313,9 +357,18 @@ if __name__ == "__main__":
             client.kill()
             Popup.error("There was a problem connecting to the server.", True)
         elif type(e) == ulerror.HTTPError:
-            Popup.warning(f"{e.code}: {e.msg}")
+            # We ignore 403 because it's incredibly common
+            # + we need to detect it at multiple points
+            if e.code != 403:
+                Popup.warning(f"{e.code}: {e.msg}")
         else:
             Popup.error(e)
+
+    # Check for old logins
+    if client.load() != None:
+        if client.registered:
+            if not Popup.yes_or_no("You have a previous login stored.\n\nLogin with old account?"):
+                client._token = ""
 
     # Attempt to register
     if not client.register():
@@ -380,8 +433,7 @@ if __name__ == "__main__":
     post_button.place(**scale((430, 470)))
 
     root.mainloop()
-
-    Popup.info("Token", client.token)
     
+    # Finalise
     client.kill()
 
