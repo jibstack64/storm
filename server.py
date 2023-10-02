@@ -1,6 +1,7 @@
 # Import required libraries
 import http.server, os
 import socketserver
+import datetime
 import random
 import string
 import json
@@ -47,7 +48,7 @@ def get(l: list[object], attr: str, value: object) -> object | None:
 def generate(l: int = NICK_LENGTH):
     "Generates a random string (characters and digits) of `l` length."
 
-    return "".join([random.choice(string.printable.strip(string.whitespace)) for _ in range(0, l)])
+    return "".join([random.choice(string.ascii_letters + string.digits) for _ in range(0, l)])
 
 def once(l: list[object], runnable: object) -> object:
     """Runs `runnable` until the output of `runnable` is no longer present in
@@ -59,6 +60,11 @@ def once(l: list[object], runnable: object) -> object:
     while o in l:
         o = runnable()
     return o
+
+def time() -> str:
+    "Returns the current time as a string."
+
+    return datetime.datetime.now().strftime("%H:%M")
 
 class StormObject:
     "Represents a generic storm JSONifiable object (e.g. users, messages)."
@@ -116,25 +122,32 @@ class StormUser(StormObject):
 class StormMessage(StormObject):
     "A container for a message's content and user."
 
-    def __init__(self, content: str, user: StormUser) -> None:
+    def __init__(self, content: str, user: StormUser, time: str) -> None:
         super().__init__()
 
         self._user, self.content = user, content
+        self._time = time
 
     @property
     def user(self) -> StormUser:
         return self._user
     
+    @property
+    def time(self) -> str:
+        return self._time
+    
     def to_json(self, secure: bool = False) -> dict:
         return {
             "user": self.user.to_json(secure),
-            "content": self.content
+            "content": self.content,
+            "time": self.time
         }
     
     def from_json(data: dict) -> StormObject:
         return StormMessage(
             data["content"],
-            get(users, "token", data["user"].get("token")) or get(users, "ip", data["user"]["ip"])
+            get(users, "token", data["user"].get("token")) or get(users, "ip", data["user"]["ip"]),
+            data["time"]
         )
 
 class StormHandler(http.server.BaseHTTPRequestHandler):
@@ -149,13 +162,13 @@ class StormHandler(http.server.BaseHTTPRequestHandler):
     def address(self) -> str:
         "I made it a property because, I mean, cmon Python standard libs!!!"
 
-        return self.address_string()
+        return ":".join([str(x) for x in self.client_address])
     
     @property
     def token(self) -> str | None:
         "The client's token."
 
-        return self.headers.get("token", "")
+        return self.headers.get("Token", "")
 
     def respond(self, data: bytes | str | dict | list, code: int = 200,
                 **headers) -> None:
@@ -186,7 +199,7 @@ class StormHandler(http.server.BaseHTTPRequestHandler):
             return self.respond(*NOT_REGISTERED)
         
         # Give the user the messages
-        self.respond([m.to_json() for m in messages])
+        self.respond([m.to_json(True) for m in messages])
 
     def do_POST(self) -> None:
         # Register the user if they're not already
@@ -210,7 +223,7 @@ class StormHandler(http.server.BaseHTTPRequestHandler):
             return self.respond(*INVALID)
         else:
             messages.append(
-                StormMessage(content, user)
+                StormMessage(content, user, time())
             )
             return self.respond(*MESSAGE_CREATED)
     

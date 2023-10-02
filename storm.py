@@ -2,6 +2,7 @@
 import tkinter.messagebox as msg
 import urllib.request as request
 import urllib.error as ulerror
+import tkinter.font as tkfont
 import tkinter as tk
 import subprocess
 import threading
@@ -9,6 +10,30 @@ import atexit
 import time
 import json
 import os
+
+def read(fn: str) -> str:
+    "Reads `fn`."
+
+    data = ""
+    with open(fn, "r") as f:
+        data = f.read()
+        f.close()
+    return data
+
+def write(data: str, fn: str) -> None:
+    "Writes `data` to `fn`."
+
+    with open(fn, "w") as f:
+        f.write(data)
+        f.close()
+
+def window() -> tk.Tk:
+    "Creates a `tk.Tk` window but applies necessary modifications first."
+
+    root = tk.Tk()
+    root.option_add("*Dialog.msg.font", f"{FONT[0]} {FONT[1]}")
+    root.config(cursor="dot green red")
+    return root
 
 def screen_geometry() -> tuple[int, int]:
     "Calculates and returns the screen's width and height."
@@ -55,34 +80,37 @@ def run(command: str | tuple) -> int | str:
 class Popup:
     "Houses functions that create simple popup messages."
 
+    # font used by all popups
+    font = None
+
     # general popups
 
     def error(message: str = "An error occured.", fatal: bool = False) -> None:
-        msg.showerror("Error", message)
+        msg.showerror("Error", message, font=Popup.font)
         if fatal:
             exit(1)
 
     def warning(message: str = "This may create errors.") -> None:
-        msg.showwarning("Warning", message)
+        msg.showwarning("Warning", message, font=Popup.font)
 
     def info(title: str, message: str) -> None:
-        msg.showinfo(title, message)
+        msg.showinfo(title, message, font=Popup.font)
 
     # conditional popups
 
     def yes_or_no(message: str, cancel: bool = False) -> bool | None:
         return msg.askyesnocancel(
-            "Question", message
+            "Question", message, font=Popup.font
         ) if cancel else msg.askyesno(
-            "Question", message
+            "Question", message, font=Popup.font
         )
     
     def proceed(message: str) -> bool:
-        return msg.askokcancel("Proceed", message)
+        return msg.askokcancel("Proceed", message, font=Popup.font)
     
     # (Same as yes_or_no)
     #def question(message: str) -> str:
-    #    return msg.askquestion("Question", message)
+    #    return msg.askquestion("Question", message, font=Popup.font)
 
 
 class StormClient:
@@ -242,9 +270,7 @@ class StormClient:
         "Reads the token from a `token` file if it exists."
 
         if os.path.isfile(TOKEN):
-            with open(TOKEN, "r") as f:
-                self._token = f.read().strip()
-                f.close()
+            self._token = read(TOKEN).strip()
             return self.token
         return None
 
@@ -252,9 +278,7 @@ class StormClient:
         "Stores the current token in a `token` file."
         
         if self.token != "":
-            with open(TOKEN, "w") as f:
-                f.write(self.token)
-                f.close()
+            write(self.token, TOKEN)
 
     def kill(self) -> None:
         "Kills all running `every` loops and shuts the client down appropriately."
@@ -285,8 +309,7 @@ def create_client() -> StormClient:
             return create_client()
         root.destroy()
 
-    root = tk.Tk()
-
+    root = window()
     root.resizable(False, False)
     root.geometry(scale("170x120"))
     root.configure(background="#F0F8FF")
@@ -296,6 +319,9 @@ def create_client() -> StormClient:
     ip_input, port_input = tk.Entry(root, width=10, font=FONT), tk.Entry(root, width=5, font=FONT)
     ip_input.place(**scale((10, 35)))
     port_input.place(**scale((110, 35)))
+    # Insert defaults
+    ip_input.insert(0, "127.0.0.1")
+    port_input.insert(0, "8080")
 
     # Ip and port labels
     tk.Label(root, text="IP:", bg="#F0F8FF", font=FONT).place(**scale((10, 10)))
@@ -330,6 +356,7 @@ Enable it?""",
 FONT = ("Arial", scale(12, "x"), "normal")
 REFRESH = 5
 TOKEN = "token"
+MESSAGES = "messages.json"
 TEXT_BG = "#181d26"
 TEXT_FG = "#ffffff"
 MAIN_BG = "#36393f"
@@ -375,16 +402,25 @@ if __name__ == "__main__":
         Popup.error("Failed to register on the server.", True)
 
     # Setup the window
-    root = tk.Tk()
-    root.resizable(False, False)
-    root.geometry(scale("500x500"))
-    root.configure(background=MAIN_BG)
-    root.title("Chat")
+    chat_win = window()
+    chat_win.resizable(False, False)
+    chat_win.geometry(scale("500x500"))
+    chat_win.configure(background=MAIN_BG)
+    chat_win.title("Chat")
+
+    message_win = tk.Toplevel(chat_win)
+    message_win.resizable(False, False)
+    message_win.geometry(scale("500x42"))
+    message_win.configure(background=MAIN_BG)
+    message_win.title("Message")
+    # Close both!!
+    message_win.protocol("WM_DELETE_WINDOW", lambda : chat_win.destroy())
 
     # Chat list
-    chat = tk.Text(root, width=53, height=24, fg=TEXT_FG, bg=TEXT_BG,
-                    wrap="word", state="disabled", font=FONT)   
-    chat.place(**scale((10, 10)))
+    chat = tk.Text(chat_win, width=scale(500), height=scale(500, "y"),
+                    fg=TEXT_FG, bg=TEXT_BG, wrap="word", state="disabled",
+                    font=FONT, padx=scale(3), pady=scale(3))   
+    chat.pack()
 
     # Fill chat automatically
     def add():
@@ -394,21 +430,34 @@ if __name__ == "__main__":
         chat.config(state="normal")
 
         chat.delete("1.0", tk.END) # Clear
-        for m in range(1, len(client.messages)+1):
-            message = client.messages[m-1]
-            chat.insert(f"{m}.0", f"{message['user']['nickname']}\t | {message['content']}\n")
+
+        m = 0
+        while m < len(client.messages)*2:
+            if m == 0 or m % 2 == 0:
+                message = client.messages[int(m/2)]
+                chat.insert(f"{m+1}.0", f"[  {message['user']['nickname']}  ] ({message['time']})\n")
+                chat.insert(f"{m+2}.0", message["content"] + "\n")
+            m += 1
         
         # User shouldn't be able to modify!!
         chat.config(state="disabled")
         chat.yview(tk.END)
 
-        root.after(REFRESH * 1000, add)
+        chat_win.after(REFRESH * 1000, add)
 
     add() # Start immediately
 
+    # Download messages
+    download = tk.Button(chat_win, text="↓", font=FONT,
+        command=lambda : (write(json.dumps(client.messages, indent=4), MESSAGES),
+                            Popup.info("Download", f"Saved message log to '{MESSAGES}'.")))
+    download.place(**scale((450, 450)))
+
     # Message input
-    message = tk.Entry(root, width=45, bg=TEXT_BG, fg=TEXT_FG, font=FONT)
-    message.place(**scale((10, 472)))
+    message = tk.Entry(message_win, width=53, bg=TEXT_BG, fg=TEXT_FG, font=FONT,
+                    insertbackground="white")
+    message.place(**scale((10, 10)))
+    message.bind("<Return>", lambda *args : send()) # When enter is pressed
 
     # Submit messages
     def send() -> None:
@@ -428,11 +477,7 @@ if __name__ == "__main__":
                     return f(*args[1:])
             return Popup.error(f"That command does not exist.")
 
-    # Message submit
-    post_button = tk.Button(root, width=5, height=1, bg=BUTTON_BG, text="Post", command=send, font=FONT)
-    post_button.place(**scale((430, 470)))
-
-    root.mainloop()
+    chat_win.mainloop()
     
     # Finalise
     client.kill()
