@@ -1,2 +1,4 @@
 token
 messages.json
+.server.py
+users.json
