@@ -1,11 +1,10 @@
 # Import required libraries
 import tkinter.messagebox as msg
-import urllib.request as request
-import urllib.error as ulerror
 import tkinter.font as tkfont
 import tkinter as tk
 import subprocess
 import threading
+import requests
 import atexit
 import time
 import json
@@ -152,23 +151,22 @@ class StormClient:
 
     # http utilities
 
-    def request(self, data: dict | list = None, method: str = None) -> request.Request:
+    def request(self, data: dict | list = None, method: str = None) -> list | dict:
         "Forms a `request.Request` object with the proper headers."
-        
-        return request.Request(
-            self.address, data=json.dumps(data).encode(self.encoding) if data != None else data,
-                headers={
+       
+        return requests.request(
+            method, self.address, data=json.dumps(data) if data != None else data,
+                headers = {
                     "Content-Type": "application/json",
                     "Token": self.token
-                },
-                method=method
-            )
+                }
+        ).json()
 
     def get(self) -> dict | list | None:
         "Sends a GET request to the server."
         
         try:
-            return json.loads(request.urlopen(self.request(None, "GET")).read())
+            return self.request(None, "GET")
         except Exception as e:
             return self.on_error(e)
 
@@ -177,7 +175,7 @@ class StormClient:
 
         data = {} if data == None else data
         try:
-            return json.loads(request.urlopen(self.request(data, "POST")).read())
+            return self.request(data, "POST") 
         except Exception as e:
             return self.on_error(e)
 
@@ -185,9 +183,8 @@ class StormClient:
         "Sends a PATCH request alongside `data`."
 
         data = {} if data == None else data
-        r = self.request(data, "PATCH")
         try:
-            return json.loads(request.urlopen(r).read())
+            return self.request(data, "PATCH") 
         except Exception as e:
             return self.on_error(e)
 
@@ -218,7 +215,7 @@ class StormClient:
             try:
                 r = self.post()
             except Exception as e:
-                if type(e) == ulerror.HTTPError:
+                if type(e) == requests.HTTPError: 
                     return True
                 else:
                     self.on_error(e)
@@ -380,10 +377,10 @@ if __name__ == "__main__":
     # Error handler
     @client.on_error
     def on_error(e: Exception):
-        if type(e) == ulerror.URLError:
+        if type(e) == requests.ConnectionError:
             client.kill()
             Popup.error("There was a problem connecting to the server.", True)
-        elif type(e) == ulerror.HTTPError:
+        elif type(e) == requests.HTTPError:
             # We ignore 403 because it's incredibly common
             # + we need to detect it at multiple points
             if e.code != 403:
